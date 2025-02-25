@@ -1,0 +1,104 @@
+from math import radians, sin, cos, sqrt, atan2
+import numpy as np
+import xarray as xr
+
+# Open the NetCDF file
+ds = xr.open_dataset("/data.nc")
+print(ds)
+
+# Extract emissions data, assuming it is stored in the variable 'emissions'
+latitudes = ds['lat'].values
+longitudes = ds['lon'].values
+time = ds['time'].values  # Assuming time is in seconds
+
+# Extract the latitudes, longitudes, and time
+latitudes = ds['lat'].values
+longitudes = ds['lon'].values
+time = ds['time'].values
+
+# Define the number of seconds in a month (assuming 30 days)
+seconds_per_month = 30 * 24 * 60 * 60  # 30 days in seconds
+
+# Calculate the grid cell areas using the Haversine formula
+def haversine(lon1, lat1, lon2, lat2):
+    R = 6371000  # Radius of Earth in meters
+    lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
+    
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1-a))
+    return R * c  # Distance in meters
+
+def calculate_grid_area(latitudes, longitudes):
+    area = np.zeros((len(latitudes)-1, len(longitudes)-1))  # Store area for each grid cell
+    for i in range(len(latitudes)-1):
+        for j in range(len(longitudes)-1):
+            lat1, lat2 = latitudes[i], latitudes[i+1]
+            lon1, lon2 = longitudes[j], longitudes[j+1]
+            dlat = haversine(lon1, lat1, lon1, lat2)
+            dlon = haversine(lon1, lat1, lon2, lat1)
+            area[i, j] = dlat * dlon  # Area in square meters
+    return area
+    
+# Calculate the grid cell areas
+grid_area = calculate_grid_area(latitudes, longitudes)
+
+# Pad the grid_area to match the shape of the pollutant data (time, lat, lon)
+# The grid_area is of shape (lat-1, lon-1), so we need to pad it to (lat, lon)
+
+# Pad grid_area along the latitude and longitude axes by one row and one column
+padded_grid_area = np.pad(grid_area, ((0, 1), (0, 1)), mode='constant', constant_values=0)
+
+# Expand dimensions to match the time dimension
+grid_area_expanded = np.expand_dims(padded_grid_area, axis=0)  # (1, lat, lon)
+grid_area_expanded = np.repeat(grid_area_expanded, len(ds['time']), axis=0)  # Repeat across the time dimension
+
+# Convert emissions from kg m⁻² s⁻¹ to kg/month
+seconds_per_month = 30 * 24 * 60 * 60  # 30 days in seconds
+
+# Create a new dataset to hold the processed monthly data
+new_ds = xr.Dataset()
+
+# Loop through all variables in the dataset (except 'time', 'lat', 'lon')
+for var_name in ds.data_vars:
+    if var_name not in ['time', 'lat', 'lon']:  # Skip non-pollutant variables
+        # Extract the data for the current variable
+        pollutant_data = ds[var_name].values
+        
+        # Ensure the grid_area_expanded has the same shape as the pollutant data
+        # The shape of pollutant_data is (time, lat, lon), and grid_area_expanded is (time, lat, lon)
+        pollutant_monthly = pollutant_data * grid_area_expanded * seconds_per_month
+
+        # Add the processed monthly data to the new dataset
+        new_ds[var_name] = (('time', 'lat', 'lon'), pollutant_monthly)
+
+        # Copy attributes from the original variable to the new variable in the new dataset
+        original_var = ds[var_name]
+        
+        # Copy relevant attributes from the original variable to the new variable
+        new_ds[var_name].attrs['long_name'] = original_var.attrs.get('long_name', '')
+        new_ds[var_name].attrs['description'] = original_var.attrs.get('description', '')
+        new_ds[var_name].attrs['units'] = 'kg/month'  # Update units to reflect monthly
+        new_ds[var_name].attrs['substance'] = original_var.attrs.get('substance', '')
+        new_ds[var_name].attrs['year'] = original_var.attrs.get('year', '')
+
+        # Add year as a metadata attribute
+        # year = ds['time'].dt.year.values[0]  # Assuming time is a datetime object and year is present
+        # new_ds[var_name + '_monthly'].attrs['year'] = year
+
+        # Optionally, print a message or inspect the result
+        print(f"Processed {var_name}. Shape of monthly data: {pollutant_monthly.shape}")
+
+# Add the time, latitude, and longitude dimensions to the new dataset (but not the original variables)
+new_ds['time'] = ds['time']
+new_ds['lat'] = ds['lat']
+new_ds['lon'] = ds['lon']
+
+# Add additional global attributes
+new_ds.attrs['created_by'] = 'haversine units conversion by Peace'
+new_ds.attrs['original_file'] = 'EDGARv8.1'
+new_ds.attrs['units_conversion'] = 'Converted from kg m⁻² s⁻¹ to kg/month'
+
+# Save the new dataset to a new NetCDF file, containing only the monthly variables
+new_ds.to_netcdf("output/new.nc")
