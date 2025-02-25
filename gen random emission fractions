@@ -1,0 +1,40 @@
+import pandas as pd
+import numpy as np
+
+# Define pollutants, country IDs, and timesteps
+pollutants = ["BC", "OC", "NH3", "NOX", "CO", "SO2", "PM25", "PM10", "NMVOC"]
+country_ids = [
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, -1
+]
+timesteps = 12
+
+# Initialize a dictionary to store DataFrames for each pollutant
+sheets = {}
+
+# Generate random fractions for each pollutant, country ID, and timestep
+np.random.seed(42)  # Set seed for reproducibility
+for pollutant in pollutants:
+    # Create a list to hold rows for this pollutant
+    data = []
+    for country_id in country_ids:
+        for timestep in range(1, timesteps + 1):
+            # Generate random fractions
+            diesel_fraction = np.random.rand()
+            petrol_fraction = 1 - diesel_fraction
+            # Append the row to the data list
+            data.append({
+                "Country_ID": country_id,
+                "Timestep": timestep,
+                "Diesel_Fraction": diesel_fraction,
+                "Petrol_Fraction": petrol_fraction
+            })
+    # Convert data for this pollutant to a DataFrame
+    sheets[pollutant] = pd.DataFrame(data)
+
+# Save each DataFrame to a separate sheet in an Excel file
+output_file = "/fractions.xlsx"
+with pd.ExcelWriter(output_file, engine="xlsxwriter") as writer:
+    for pollutant, df in sheets.items():
+        df.to_excel(writer, sheet_name=pollutant, index=False)
+
+print(f"Random fractions saved to {output_file} with separate sheets for each pollutant.")
