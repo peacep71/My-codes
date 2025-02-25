@@ -1,0 +1,121 @@
+import xarray as xr
+import numpy as np
+import pandas as pd
+
+# Load the existing country_mask NetCDF file
+country_mask_file = "/data.nc"
+country_mask_data = xr.open_dataset(country_mask_file)
+
+# Extract the country_mask array and check its shape
+country_mask = country_mask_data['country_mask'].values
+print(f"Shape of country_mask: {country_mask.shape}")
+
+# Handle multi-dimensional shapes
+if len(country_mask.shape) == 2:
+    lat, lon = country_mask.shape
+elif len(country_mask.shape) == 3:  # e.g., (time, lat, lon)
+    _, lat, lon = country_mask.shape
+    country_mask = country_mask[0, :, :]  # Assuming the first time slice is used
+else:
+    raise ValueError(f"Unexpected country_mask shape: {country_mask.shape}")
+
+# Check available country IDs in the country_mask
+unique_country_ids = np.unique(country_mask)
+print("Available country IDs in country_mask:", unique_country_ids)
+
+# Load the fuel fractions from an Excel file with sheets for each pollutant
+fuel_fractions_file = "/home/peace/Desktop/model_setups/country mask/fractions.xlsx"
+fuel_fractions_data = pd.read_excel(fuel_fractions_file, sheet_name=None)
+
+# Initialize a dictionary to store time-dependent fuel fractions by pollutant
+fuel_fractions = {}
+
+# Populate the dictionary with data from the Excel sheets
+for pollutant, df in fuel_fractions_data.items():
+    fuel_fractions[pollutant] = {}
+    for country_id in df['Country_ID'].unique():
+        country_data = df[df['Country_ID'] == country_id]
+        time_step_fractions = {}
+        for _, row in country_data.iterrows():
+            time_step = row['Timestep']
+            diesel_fraction = row['Diesel_Fraction']
+            petrol_fraction = row['Petrol_Fraction']
+            time_step_fractions[time_step] = (diesel_fraction, petrol_fraction)
+        fuel_fractions[pollutant][country_id] = time_step_fractions
+
+# Create and populate diesel and petrol fraction arrays for each pollutant and time step
+time_steps = 12  # Assuming 12 time steps
+time_dim = np.arange(time_steps)  # Time dimension array
+
+for pollutant in fuel_fractions:
+    # Initialize arrays for diesel and petrol fractions across all time steps
+    diesel_fraction_array = np.zeros((time_steps, lat, lon), dtype=float)
+    petrol_fraction_array = np.zeros((time_steps, lat, lon), dtype=float)
+    
+    for time_step in range(1, time_steps + 1):
+        for country_id, fractions_by_time in fuel_fractions[pollutant].items():
+            if time_step in fractions_by_time:
+                diesel_fraction, petrol_fraction = fractions_by_time[time_step]
+                
+                # Create a boolean mask for cells that match the current country_id
+                region_cells = (country_mask == country_id)
+                
+                # Assign diesel and petrol fractions to these cells for the current time step
+                diesel_fraction_array[time_step - 1, :, :][region_cells] = diesel_fraction
+                petrol_fraction_array[time_step - 1, :, :][region_cells] = petrol_fraction
+
+    # Add the fraction arrays to the country_mask_data as new variables with a time dimension
+    country_mask_data[f"{pollutant}_diesel_fraction"] = (
+        ('time', 'lat', 'lon'),
+        diesel_fraction_array
+    )
+    country_mask_data[f"{pollutant}_petrol_fraction"] = (
+        ('time', 'lat', 'lon'),
+        petrol_fraction_array
+    )
+    
+    # Adding attributes to the new variables
+    country_mask_data[f"{pollutant}_diesel_fraction"].attrs = {
+        'long_name': f'{pollutant} diesel fraction',
+        'description': 'Fraction of diesel fuel used for each pollutant',
+        'units': 'fraction',
+        'substance': pollutant,
+        'year': '2018'  # Adjust year as needed
+    }
+    country_mask_data[f"{pollutant}_petrol_fraction"].attrs = {
+        'long_name': f'{pollutant} petrol fraction',
+        'description': 'Fraction of petrol fuel used for each pollutant',
+        'units': 'fraction',
+        'substance': pollutant,
+        'year': '2018'  # Adjust year as needed
+    }
+
+# Add attributes to the country_mask variable
+country_mask_data['country_mask'].attrs = {
+    'long_name': 'Country Mask',
+    'description': 'Grid cell identification by country. Each cell corresponds to a unique country ID',
+    'units': 'ID',  # This is typically an integer ID, so 'ID' is used
+    'substance': 'Country Identifier',
+    'year': '2018'  # Adjust year as needed
+}
+
+# Add attributes for latitude (lat) and longitude (lon)
+country_mask_data['lat'].attrs = {
+    'long_name': 'Latitude',
+    'standard_name': 'Latitude',
+    'units': 'degrees_north',
+    'axis': 'Y'
+}
+
+country_mask_data['lon'].attrs = {
+    'long_name': 'Longitude',
+    'standard_name': 'Longitude',
+    'units': 'degrees_east',
+    'axis': 'X' 
+}
+
+# Save the updated country_mask file with the added fraction variables
+output_file = "/home/peace/Desktop/model_setups/country mask/eez_dictionary.nc"
+country_mask_data.to_netcdf(output_file)
+
+print(f"Updated country mask saved to {output_file} with diesel and petrol fractions for each pollutant.")
