@@ -1,0 +1,74 @@
+import xarray as xr
+import numpy as np
+
+# File paths
+emissions_file = "/data.nc"  # File containing the pollutant emissions
+country_mask_file = "/data.nc"  # File containing the country mask and fuel fractions
+
+# Load the datasets
+emissions_data = xr.open_dataset(emissions_file)
+country_mask_data = xr.open_dataset(country_mask_file)
+
+# List of pollutants to process
+pollutants = ["BC", "CO", "NH3", "NOX", "SO2", "PM25", "PM10", "OC", "NMVOC"]  # Update this list based on pollutants in your emissions dataset
+
+# Create a new dataset for the split emissions
+split_emissions_data = xr.Dataset()
+
+# Loop through pollutants and apply the specific fractions
+for pollutant in pollutants:
+    if pollutant in emissions_data.variables:  # Check if pollutant exists in the emissions dataset
+        # Ensure fraction variables are present in the country mask data
+        diesel_fraction_var = f"{pollutant}_diesel_fraction"
+        petrol_fraction_var = f"{pollutant}_petrol_fraction"
+        if diesel_fraction_var not in country_mask_data.variables or petrol_fraction_var not in country_mask_data.variables:
+            print(f"Warning: Fraction variables for {pollutant} are missing in the country mask dataset.")
+            continue
+
+        # Extract the fraction arrays from the country mask
+        diesel_fraction = country_mask_data[diesel_fraction_var].values
+        petrol_fraction = country_mask_data[petrol_fraction_var].values
+
+        # Extract the pollutant emissions data
+        pollutant_emissions = emissions_data[pollutant].values
+
+        # Check if dimensions align
+        if pollutant_emissions.shape != diesel_fraction.shape:
+            raise ValueError(f"Dimension mismatch for {pollutant}: "
+                             f"emissions data shape {pollutant_emissions.shape} "
+                             f"does not match country mask shape {diesel_fraction.shape}.")
+
+        # Calculate petrol and diesel emissions
+        petrol_emissions = pollutant_emissions * petrol_fraction
+        diesel_emissions = pollutant_emissions * diesel_fraction
+
+        # Add the split emissions to the new dataset
+        split_emissions_data[f"{pollutant}_petrol"] = (emissions_data[pollutant].dims, petrol_emissions)
+        split_emissions_data[f"{pollutant}_diesel"] = (emissions_data[pollutant].dims, diesel_emissions)
+
+        # Add attributes to the split emissions variables (same attributes as the original data)
+        for var_name in [f"{pollutant}_petrol", f"{pollutant}_diesel"]:
+            split_emissions_data[var_name].attrs['long_name'] = f"{pollutant} emissions, split by fuel type"
+            split_emissions_data[var_name].attrs['description'] = f"Emissions of {pollutant} split"
+            split_emissions_data[var_name].attrs['units'] = emissions_data[pollutant].attrs['units']
+            split_emissions_data[var_name].attrs['substance'] = pollutant
+            split_emissions_data[var_name].attrs['year'] = emissions_data[pollutant].attrs['year']
+
+        # Add time, lat, lon dimensions if they don't already exist
+        split_emissions_data.coords['time'] = emissions_data.coords['time']
+        split_emissions_data.coords['lat'] = emissions_data.coords['lat']
+        split_emissions_data.coords['lon'] = emissions_data.coords['lon']
+
+    else:
+        print(f"Warning: {pollutant} not found in the emissions dataset.")
+
+# Add additional global attributes
+split_emissions_data.attrs['created_by'] = 'Transport sector split into fuel type usage for petrol and diesel; developed by Peace'
+split_emissions_data.attrs['note'] = 'southern Africa domain'
+split_emissions_data.attrs['grid_mapping'] = '0.1 x 0.1 grid resolution across the domain'
+
+# Save the split emissions to a new file
+output_file_path = "/home/peace/Desktop/model_setups/country mask/new.nc"
+split_emissions_data.to_netcdf(output_file_path)
+
+print(f"Split emissions data by fuel type saved to {output_file_path}")
