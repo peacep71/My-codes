@@ -115,7 +115,7 @@ country_mask_data['lon'].attrs = {
 }
 
 # Save the updated country_mask file with the added fraction variables
-output_file = "/home/peace/Desktop/model_setups/country mask/eez_dictionary.nc"
+output_file = "/dictionary.nc"
 country_mask_data.to_netcdf(output_file)
 
 print(f"Updated country mask saved to {output_file} with diesel and petrol fractions for each pollutant.")
