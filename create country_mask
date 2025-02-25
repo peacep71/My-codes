@@ -1,0 +1,91 @@
+import xarray as xr
+import geopandas as gpd
+import numpy as np
+import rasterio
+from rasterio.features import rasterize
+import pandas as pd
+
+# Load the emissions data to get the spatial grid and time dimension
+emissions_file_path = "data.nc"
+emissions_data = xr.open_dataset(emissions_file_path)
+latitudes = emissions_data['lat'].values
+longitudes = emissions_data['lon'].values
+time = emissions_data['time']  # Extract time as xarray DataArray
+
+# Load the southern Africa shapefile
+shapefile_path = "/shapefile.shp"
+countries_gdf = gpd.read_file(shapefile_path)
+
+# Ensure CRS is WGS84
+if countries_gdf.crs != "EPSG:4326":
+    countries_gdf = countries_gdf.to_crs("EPSG:4326")
+    
+# Dissolve multi-polygons into single polygons by a unique identifier (e.g., country name or code)
+countries_gdf = countries_gdf.dissolve(by='NAME')
+
+# Assign a unique ID to each country
+countries_gdf['country_id'] = np.arange(1, len(countries_gdf) + 1)
+
+# Define the transform to match the emissions data grid precisely
+transform = rasterio.transform.from_bounds(
+    longitudes.min(), latitudes.min(), longitudes.max(), latitudes.max(),
+    len(longitudes), len(latitudes)
+)
+
+# Create a mapping of country IDs to country names
+country_id_mapping = countries_gdf[['country_id']].merge(
+    countries_gdf.reset_index()[['NAME', 'country_id']], 
+    on='country_id'
+)
+
+# Add a row for ocean and non-country areas (ID -1)
+ocean_row = pd.DataFrame({'country_id': [-1], 'NAME': ['Ocean or Non-country Area']})
+country_id_mapping = pd.concat([country_id_mapping[['country_id', 'NAME']], ocean_row], ignore_index=True)
+
+# Print the mapping
+print("Country ID Mapping:")
+print(country_id_mapping[['country_id', 'NAME']])
+
+# Generate the country mask with rasterize, ensuring all touches are counted
+shapes = ((geom, country_id) for geom, country_id in zip(countries_gdf.geometry, countries_gdf['country_id']))
+country_mask = rasterize(
+    shapes=shapes,
+    out_shape=(len(latitudes), len(longitudes)),
+    transform=transform,
+    fill=-1,          # Ocean or non-country cells marked with -1
+    dtype=np.int32,
+    all_touched=True  # Capture any cell touched by a country boundary
+)
+
+# Expand country mask to include the time dimension
+country_mask_expanded = np.expand_dims(country_mask, axis=0)  # Add a new time axis
+country_mask_expanded = np.repeat(country_mask_expanded, len(time), axis=0)  # Repeat for all time steps
+
+# Convert to xarray DataArray
+country_mask_xr = xr.DataArray(
+    country_mask_expanded,
+    coords={'time': time, 'lat': latitudes[::-1], 'lon': longitudes},  # Flip latitudes to match emissions data orientation
+    dims=('time', 'lat', 'lon')
+)
+
+# Now sort the dataset after creation, if necessary to change the lat to ascending order (north to south)
+country_mask_xr = country_mask_xr.sortby('lat')
+
+# Create xarray Dataset for the country mask
+country_mask_ds = xr.Dataset(
+    {
+        'country_mask': country_mask_xr
+    }
+)
+
+# Add additional global attributes
+country_mask_ds.attrs['created_by'] = 'country mask with unique IDs for southern Africa developed by Peace'
+country_mask_ds.attrs['units'] = 'ID'
+country_mask_ds.attrs['note'] = 'Ocean or non-country grid cells are set to -1. Time dimension added to match emissions data.'
+country_mask_ds.attrs['grid_mapping'] = '0.1 x 0.1 grid resolution across the domain'
+
+# Save the country mask to a new NetCDF file
+output_file = "/home/peace/Desktop/model_setups/country mask/masktime.nc"
+country_mask_ds.to_netcdf(output_file)
+
+print(f"Country mask with time dimension saved to {output_file}")
